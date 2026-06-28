@@ -29,7 +29,7 @@ public class BackendClientTest
         client = new BackendClient(
             new OkHttpClient(), new com.google.gson.Gson(),
             server.url("/").toString(),
-            queueFile, 3, 10);
+            queueFile, 10);
     }
 
     @After public void tearDown() throws Exception { server.shutdown(); }
@@ -55,36 +55,13 @@ public class BackendClientTest
     }
 
     @Test
-    public void retriesOnNetworkFailure() throws Exception {
+    public void singleAttemptFailureReturnsNullAndQueues() throws Exception {
+        // One failed call → null returned, payload appended to queue.
         server.enqueue(new MockResponse().setSocketPolicy(
             okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_START));
-        server.enqueue(new MockResponse().setSocketPolicy(
-            okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_START));
-        server.enqueue(new MockResponse().setResponseCode(200)
-            .setBody("{\"order_id\":7}"));
-        Long orderId = client.postEvent(samplePayload());
-        assertEquals(Long.valueOf(7L), orderId);
-        assertEquals(3, server.getRequestCount());
-    }
-
-    @Test
-    public void givesUpAfterMaxAttemptsAndReturnsNull() throws Exception {
-        for (int i = 0; i < 3; i++) {
-            server.enqueue(new MockResponse().setSocketPolicy(
-                okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_START));
-        }
         Long orderId = client.postEvent(samplePayload());
         assertNull(orderId);
-        assertEquals(3, server.getRequestCount());
-    }
-
-    @Test
-    public void permanentFailureAppendsToQueueFile() throws Exception {
-        for (int i = 0; i < 3; i++) {
-            server.enqueue(new MockResponse().setSocketPolicy(
-                okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_START));
-        }
-        client.postEvent(samplePayload());
+        assertEquals(1, server.getRequestCount());   // exactly one attempt
         java.util.List<String> lines = Files.readAllLines(queueFile);
         assertEquals(1, lines.size());
         assertTrue(lines.get(0).contains("\"plugin_lifecycle_id\":\"uuid-1\""));
@@ -106,10 +83,8 @@ public class BackendClientTest
     public void drainFailureLeavesEventOnQueue() throws Exception {
         String seeded = new com.google.gson.Gson().toJson(samplePayload());
         Files.write(queueFile, java.util.Collections.singletonList(seeded));
-        for (int i = 0; i < 3; i++) {
-            server.enqueue(new MockResponse().setSocketPolicy(
-                okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_START));
-        }
+        server.enqueue(new MockResponse().setSocketPolicy(
+            okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_START));
         int drained = client.drainQueue();
         assertEquals(0, drained);
         // Event still on disk.
@@ -125,10 +100,8 @@ public class BackendClientTest
         }
         Files.write(queueFile, lines);
         // Force one more append via a failing post.
-        for (int i = 0; i < 3; i++) {
-            server.enqueue(new MockResponse().setSocketPolicy(
-                okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_START));
-        }
+        server.enqueue(new MockResponse().setSocketPolicy(
+            okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_START));
         client.postEvent(samplePayload());
         java.util.List<String> after = Files.readAllLines(queueFile);
         assertEquals(10, after.size());

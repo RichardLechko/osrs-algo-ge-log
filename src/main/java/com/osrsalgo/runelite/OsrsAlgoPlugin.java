@@ -36,7 +36,6 @@ import okhttp3.OkHttpClient;
 )
 public class OsrsAlgoPlugin extends Plugin
 {
-    private static final int MAX_ATTEMPTS = 3;
     private static final int MAX_QUEUE_LINES = 10_000;
     private static final long DRAIN_INTERVAL_SEC = 30;
 
@@ -63,7 +62,7 @@ public class OsrsAlgoPlugin extends Plugin
         Files.createDirectories(pluginDir);
         Path queueFile = pluginDir.resolve("queue.jsonl");
         backend = new BackendClient(httpClient, gson, config.backendUrl(),
-            queueFile, MAX_ATTEMPTS, MAX_QUEUE_LINES);
+            queueFile, MAX_QUEUE_LINES);
         panel = new OsrsAlgoPanel();
         panel.setStatus("ready", Color.GREEN);
         navButton = NavigationButton.builder()

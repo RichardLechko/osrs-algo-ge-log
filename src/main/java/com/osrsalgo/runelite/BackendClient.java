@@ -4,74 +4,55 @@ import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.io.IOException;
-import java.io.StringReader;
 import java.nio.file.Path;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
 
-/** Thin HTTP wrapper for the Flask backend. Owns the offline queue
- *  (added in Task 10). File I/O is serialized via fileLock; HTTP work
- *  runs without any lock so the client thread isn't blocked waiting
- *  for backoff sleeps during a drain. */
+/** Thin HTTP wrapper for the Flask backend. Owns the offline queue.
+ *  File I/O is serialized via fileLock; HTTP work runs without any
+ *  lock so the client thread isn't blocked during a drain. */
 @Slf4j
 public class BackendClient
 {
     private static final MediaType JSON = MediaType.parse("application/json");
-    private static final long[] BACKOFF_MS = {1000, 2000, 5000};
 
     private final OkHttpClient http;
     private final Gson gson;
     private final String baseUrl;
     private final Path queueFile;
-    private final int maxAttempts;
     private final int maxQueueLines;
     private final Object fileLock = new Object();
 
     public BackendClient(OkHttpClient http, Gson gson, String baseUrl, Path queueFile,
-                         int maxAttempts, int maxQueueLines)
+                         int maxQueueLines)
     {
         this.http = http;
         this.gson = gson;
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.queueFile = queueFile;
-        this.maxAttempts = maxAttempts;
         this.maxQueueLines = maxQueueLines;
     }
 
-    /** Returns the backend order_id on success, null on permanent failure
-     *  (caller should queue the payload — that path is added in Task 10). */
+    /** Returns the backend order_id on success, null on failure (event
+     *  is queued for later drain). One HTTP attempt only — retries
+     *  happen via the scheduled drain timer in OsrsAlgoPlugin, which
+     *  uses a ScheduledExecutorService (Plugin Hub policy: no
+     *  Thread.sleep, no Thread.interrupt). */
     public Long postEvent(GeEventPayload payload)
     {
-        String json = gson.toJson(payload);
-        Request req = new Request.Builder()
-            .url(baseUrl + "/api/ge-events")
-            .post(RequestBody.create(JSON, json))
-            .build();
-        for (int attempt = 0; attempt < maxAttempts; attempt++) {
-            try (Response resp = http.newCall(req).execute()) {
-                if (resp.isSuccessful()) {
-                    String body = resp.body() != null ? resp.body().string() : "{}";
-                    JsonObject parsed = new JsonParser().parse(new StringReader(body)).getAsJsonObject();
-                    return parsed.get("order_id").getAsLong();
-                }
-                log.warn("ge-events POST got {} — attempt {}/{}",
-                    resp.code(), attempt + 1, maxAttempts);
-            } catch (IOException e) {
-                log.warn("ge-events POST IO error: {} — attempt {}/{}",
-                    e.getMessage(), attempt + 1, maxAttempts);
-            }
-            if (attempt < maxAttempts - 1) sleep(BACKOFF_MS[attempt]);
+        Long orderId = postEventInternal(payload);
+        if (orderId == null) {
+            // Single attempt failed — queue for the next scheduled drain.
+            appendToQueue(payload);
         }
-        // All attempts exhausted — queue for later drain.
-        appendToQueue(payload);
-        return null;
+        return orderId;
     }
 
     /** Returns the count of events successfully re-posted. File I/O is
      *  serialized via fileLock; HTTP work runs without any lock so a
-     *  concurrent postEvent() from the client thread isn't blocked
-     *  waiting for backoff sleeps. Events appended during drain are
-     *  preserved by re-reading the queue before the rewrite. */
+     *  concurrent postEvent() from the client thread isn't blocked.
+     *  Events appended during drain are preserved by re-reading the
+     *  queue before the rewrite. */
     public int drainQueue()
     {
         java.util.List<String> queued;
@@ -121,8 +102,10 @@ public class BackendClient
         return succeeded;
     }
 
-    /** Same as postEvent but never appends to the queue on failure — used
-     *  by the drain loop so a permanently-failing event doesn't multiply. */
+    /** Single-attempt POST. Returns order_id on 2xx, null on any
+     *  failure (IO, non-2xx, parse error). Used by both postEvent
+     *  (which queues on null) and drainQueue (which leaves the line
+     *  in the queue on null). */
     private Long postEventInternal(GeEventPayload payload)
     {
         String json = gson.toJson(payload);
@@ -130,17 +113,15 @@ public class BackendClient
             .url(baseUrl + "/api/ge-events")
             .post(RequestBody.create(JSON, json))
             .build();
-        for (int attempt = 0; attempt < maxAttempts; attempt++) {
-            try (Response resp = http.newCall(req).execute()) {
-                if (resp.isSuccessful()) {
-                    String body = resp.body() != null ? resp.body().string() : "{}";
-                    return new JsonParser().parse(body).getAsJsonObject()
-                        .get("order_id").getAsLong();
-                }
-            } catch (IOException e) {
-                /* fallthrough to backoff */
+        try (Response resp = http.newCall(req).execute()) {
+            if (resp.isSuccessful()) {
+                String body = resp.body() != null ? resp.body().string() : "{}";
+                return new JsonParser().parse(body).getAsJsonObject()
+                    .get("order_id").getAsLong();
             }
-            if (attempt < maxAttempts - 1) sleep(BACKOFF_MS[attempt]);
+            log.warn("ge-events POST got HTTP {}", resp.code());
+        } catch (IOException e) {
+            log.warn("ge-events POST IO error: {}", e.getMessage());
         }
         return null;
     }
@@ -203,12 +184,6 @@ public class BackendClient
         } catch (IOException e) {
             log.warn("reconcile network error: {}", e.getMessage());
             return java.util.Collections.emptyMap();
-        }
-    }
-
-    private void sleep(long ms) {
-        try { Thread.sleep(ms); } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
         }
     }
 }
