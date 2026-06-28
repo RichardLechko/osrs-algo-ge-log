@@ -27,7 +27,8 @@ public class BackendClientTest
         server.start();
         queueFile = tmp.newFile("queue.jsonl").toPath();
         client = new BackendClient(
-            new OkHttpClient(), server.url("/").toString(),
+            new OkHttpClient(), new com.google.gson.Gson(),
+            server.url("/").toString(),
             queueFile, 3, 10);
     }
 

@@ -25,6 +25,7 @@ import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.util.ImageUtil;
+import com.google.gson.Gson;
 import okhttp3.OkHttpClient;
 
 @Slf4j
@@ -44,6 +45,7 @@ public class OsrsAlgoPlugin extends Plugin
     @Inject private ClientThread clientThread;
     @Inject private ItemManager itemManager;
     @Inject private OkHttpClient httpClient;
+    @Inject private Gson gson;
     @Inject private ClientToolbar clientToolbar;
     @Inject private EventBus eventBus;
 
@@ -60,7 +62,7 @@ public class OsrsAlgoPlugin extends Plugin
         Path pluginDir = RuneLite.RUNELITE_DIR.toPath().resolve("osrs-algo");
         Files.createDirectories(pluginDir);
         Path queueFile = pluginDir.resolve("queue.jsonl");
-        backend = new BackendClient(httpClient, config.backendUrl(),
+        backend = new BackendClient(httpClient, gson, config.backendUrl(),
             queueFile, MAX_ATTEMPTS, MAX_QUEUE_LINES);
         panel = new OsrsAlgoPanel();
         panel.setStatus("ready", Color.GREEN);

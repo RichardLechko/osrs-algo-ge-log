@@ -17,20 +17,21 @@ import okhttp3.*;
 public class BackendClient
 {
     private static final MediaType JSON = MediaType.parse("application/json");
-    private static final Gson GSON = new Gson();
     private static final long[] BACKOFF_MS = {1000, 2000, 5000};
 
     private final OkHttpClient http;
+    private final Gson gson;
     private final String baseUrl;
     private final Path queueFile;
     private final int maxAttempts;
     private final int maxQueueLines;
     private final Object fileLock = new Object();
 
-    public BackendClient(OkHttpClient http, String baseUrl, Path queueFile,
+    public BackendClient(OkHttpClient http, Gson gson, String baseUrl, Path queueFile,
                          int maxAttempts, int maxQueueLines)
     {
         this.http = http;
+        this.gson = gson;
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.queueFile = queueFile;
         this.maxAttempts = maxAttempts;
@@ -41,7 +42,7 @@ public class BackendClient
      *  (caller should queue the payload — that path is added in Task 10). */
     public Long postEvent(GeEventPayload payload)
     {
-        String json = GSON.toJson(payload);
+        String json = gson.toJson(payload);
         Request req = new Request.Builder()
             .url(baseUrl + "/api/ge-events")
             .post(RequestBody.create(JSON, json))
@@ -91,7 +92,7 @@ public class BackendClient
         for (String line : queued) {
             GeEventPayload payload;
             try {
-                payload = GSON.fromJson(line, GeEventPayload.class);
+                payload = gson.fromJson(line, GeEventPayload.class);
             } catch (Exception e) {
                 log.warn("skipping malformed queued event: {}", e.getMessage());
                 succeededLines.add(line);   // remove unparseable junk too
@@ -124,7 +125,7 @@ public class BackendClient
      *  by the drain loop so a permanently-failing event doesn't multiply. */
     private Long postEventInternal(GeEventPayload payload)
     {
-        String json = GSON.toJson(payload);
+        String json = gson.toJson(payload);
         Request req = new Request.Builder()
             .url(baseUrl + "/api/ge-events")
             .post(RequestBody.create(JSON, json))
@@ -151,7 +152,7 @@ public class BackendClient
                 java.util.List<String> current = java.nio.file.Files.exists(queueFile)
                     ? new java.util.ArrayList<>(java.nio.file.Files.readAllLines(queueFile))
                     : new java.util.ArrayList<>();
-                current.add(GSON.toJson(payload));
+                current.add(gson.toJson(payload));
                 // Cap at maxQueueLines — drop from the head if we exceed it.
                 while (current.size() > maxQueueLines) {
                     current.remove(0);
@@ -177,7 +178,7 @@ public class BackendClient
      *  if no slots matched — fresh UUIDs on next event). */
     public java.util.Map<Integer, ReconciledSlot> reconcile(ReconcileRequest body)
     {
-        String json = GSON.toJson(body);
+        String json = gson.toJson(body);
         Request req = new Request.Builder()
             .url(baseUrl + "/api/ge-events/reconcile")
             .post(RequestBody.create(JSON, json))
